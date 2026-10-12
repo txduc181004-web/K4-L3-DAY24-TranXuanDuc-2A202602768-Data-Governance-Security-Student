@@ -1,0 +1,10 @@
+# Quét secret ở mọi commit bằng Gitleaks đã cài sẵn trong PATH (gitleaks-system),
+# pin đúng tag v8.30.1 để hook không tự trôi sang bản khác.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks-system
+        args: ["--config", ".gitleaks.toml"]
+        # `gitleaks git` chỉ nhận một repo path, không nhận danh sách file.
+        pass_filenames: false

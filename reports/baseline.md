@@ -1,5 +1,5 @@
 # Baseline — điền trong checkpoint 1
 
-1. Agent có identity mỗi run chưa? Dẫn file/hàm:
-2. Ai cho phép `http_post`? Dẫn file/hàm:
-3. Nếu gửi sai PII ra sink, bằng chứng ở đâu? Dẫn file/hàm:
+1. **Agent có identity mỗi run chưa? Dẫn file/hàm:** Chưa. `_naive_loop()` (`agent/loop.py:27-54`) không tạo `agent_id`/`run_id` và không nhận principal. `run_once()` có tham số `principal_id` (`agent/loop.py:58`) nhưng khi rơi về baseline thì gọi `_naive_loop(message, llm)` (`agent/loop.py:74`) và bỏ principal đi. Vì vậy mọi tool call chạy với một identity ngầm, quyền vô hạn, không gắn với người ra lệnh.
+2. **Ai cho phép `http_post`? Dẫn file/hàm:** Không ai. Quyết định gọi đến từ LLM: `llm.find_injection(combined_text)` (`agent/loop.py:34`) đọc **untrusted content** từ `search_docs` rồi trả `customer_ids` và `target_url`. Loop làm theo ngay: `tools.read_customer(...)` (`agent/loop.py:39`) và `tools.http_post(injected.target_url, ...)` (`agent/loop.py:44`). Không có PEP (`policy.check`) đứng giữa. Rào duy nhất là allowlist cứng `127.0.0.1:10024` trong `tools.http_post()` (`agent/tools.py:76-83`), vốn chỉ để lab chạy an toàn chứ không phải policy. Một run cầm đủ cả 3 chân trifecta: untrusted content, private data và egress.
+3. **Nếu gửi sai PII ra sink, bằng chứng ở đâu? Dẫn file/hàm:** Phía agent không có bằng chứng nào, vì baseline không có ledger. Bằng chứng duy nhất nằm ở **phía nhận**: `sink/sink.py` `do_POST()` (`sink/sink.py:42-50`) ghi body vào `reports/sink.log`. Ở Bước 2 file này được copy thành `reports/attack-before.log`, chứa nguyên CCCD/SĐT/STK synthetic của `KH-000999`. Trong thực tế đây là log của attacker nên chủ hệ thống không có nó. Agent cần ledger riêng ghi lại cả allow lẫn deny.

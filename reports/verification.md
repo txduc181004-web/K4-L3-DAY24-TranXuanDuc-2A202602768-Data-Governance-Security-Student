@@ -1,7 +1,24 @@
 # Verification — điền trước khi nộp
 
-- OS / Python / Gitleaks version:
-- `python -m pytest tests/ -q`:
-- `pre-commit run --all-files`:
-- Ledger verify:
-- Các lỗi còn lại:
+- **OS / Python / Gitleaks version:** macOS 27.0.1 (Darwin 27.0.0, arm64) / Python 3.14.8 (venv `.venv`) / Gitleaks 8.30.1 (release chính thức `darwin_arm64`, SHA-256 `b40ab0ae…aeb6a5` khớp file checksums, đặt ở `.venv/bin/gitleaks`).
+- **`python -m pytest tests/ -q`:** `33 passed`.
+  - `test_pii.py -s`: `gold=118 pred=118 tp=118`, `precision=1.000 recall=1.000`.
+  - `test_injection.py`: 8/8 (4 biến thể × `support_l1`, `dpo`).
+  - `test_split.py`: không đọc `KH-000777`, vẫn đọc khách hợp lệ.
+  - `test_obo.py` 5/5; `test_policy.py` 4/4; `test_ledger.py` 3/3; `test_supply_chain.py` 3/3.
+- **`pre-commit run --all-files`:** `Detect hardcoded secrets....Passed` (hook `gitleaks-system`, `rev: v8.30.1`, `pass_filenames: false`).
+- **Gitleaks:**
+  - `gitleaks git --config .gitleaks.toml --redact --verbose .` → 1 finding `lab24-synthetic-token` ở commit `1bdd849`, file `lab-fake-secret.txt`, exit 1 (dự kiến; xem `reports/secrets-incident.md`).
+  - `gitleaks dir --config .gitleaks.toml .` → `no leaks found`, exit 0.
+- **Hash lock:** `requirements.lock` sinh bằng `pip-compile --generate-hashes`. Mọi package (`certifi`, `charset-normalizer`, `idna`, `iniconfig`, `packaging`, `pluggy`, `pygments`, `pytest`, `requests`, `urllib3`) đều có `--hash=sha256`. `pip install --require-hashes -r requirements.lock` chạy thành công.
+- **Lure:** `python -m agent.check_lure 'corpus/ticket-90*.md'` → `4/4 lure sẵn sàng`.
+- **Before/after:**
+  - `reports/attack-before.log` = 298 byte, 1 POST `/reconcile` chứa record synthetic `KH-000999`.
+  - `reports/attack-after.log` = 0 byte. Tạo bằng: `sink --reset` → `pytest` → `sink --reset` → `python -m agent.loop --mock --as dpo "Tổng hợp các ticket còn mở tuần này"` → copy `sink.log`.
+- **Ledger verify:** `verify(Path('reports/ledger.jsonl'))` → `True` (48 dòng: 24 của `support_l1`, 24 của `dpo`; mọi dòng có `reason`, `on_behalf_of`, `run_id`, `expires_at`).
+  - Thử tamper trên **bản sao**: đổi `"decision": "deny"` → `"allow"` ở dòng 27 (`http_post` của `dpo`) mà không tính lại hash → `verify() == False`.
+- **Các lỗi còn lại / lưu ý:**
+  - Không có test fail.
+  - Hook `gitleaks-system` gọi `gitleaks` từ PATH. Binary đang nằm trong `.venv/bin`, nên khi `git commit` phải activate venv trước (hoặc cài gitleaks 8.30.1 vào PATH hệ thống), nếu không hook báo không tìm thấy lệnh.
+  - Điều khoản pháp luật trong `compliance-mapping.md` đã được đối chiếu với toàn văn **đăng lại trên LuatVietnam**: bản Word của Luật 91 và Luật 134; trích đoạn các điều 3, 4, 8, 10, 19 của NĐ 356. Chưa đối chiếu được với Công báo/vbpl.moj.gov.vn vì máy không phân giải được tên miền vbpl.moj.gov.vn.
+  - Ledger không phát hiện được việc cắt dòng cuối hoặc viết lại toàn bộ chuỗi (giới hạn đã nêu trong đề).

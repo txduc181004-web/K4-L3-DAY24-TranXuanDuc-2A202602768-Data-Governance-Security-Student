@@ -34,7 +34,18 @@ không phải xác thực người dùng production.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+PRINCIPALS_FILE = Path(__file__).resolve().parent.parent / "data" / "principals.json"
+
+KNOWN_CLASSIFICATIONS = {"public", "internal", "restricted"}
+
+# Data minimisation: đọc dữ liệu restricted phải có mục đích nghiệp vụ cụ thể.
+# "summarize-tickets" không đủ lý do để mở hồ sơ chứa CCCD/STK.
+RESTRICTED_PURPOSES = {"support-reply", "billing-reconciliation", "privacy-audit"}
 
 
 @dataclass(frozen=True)
@@ -51,5 +62,60 @@ class PolicyContext:
     expires_at: str = ""
 
 
+def _load_principals() -> dict:
+    # Đọc lại mỗi lần check: thu hồi quyền trong principals.json có hiệu lực ngay.
+    return json.loads(PRINCIPALS_FILE.read_text(encoding="utf-8"))
+
+
+def _parse_expiry(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 def check(context: PolicyContext) -> tuple[bool, str]:
-    raise NotImplementedError("BƯỚC 3b: implement policy check")
+    """Default deny: chỉ allow khi qua hết mọi rule; mỗi nhánh có reason riêng."""
+    c = context
+    tool = c.requested_tool or "<unspecified>"
+
+    # Rule tối thiểu, đứng đầu để không điều kiện OBO nào "mở" được nó.
+    if c.data_classification == "restricted" and c.egress_enabled:
+        return False, (f"deny {tool}: dữ liệu restricted không được đi kèm egress "
+                       f"(rule tối thiểu restricted+egress)")
+    if c.data_classification not in KNOWN_CLASSIFICATIONS:
+        return False, f"deny {tool}: classification không hợp lệ {c.data_classification!r}"
+
+    principals = _load_principals()
+    principal = principals.get(c.principal_id)
+    if principal is None:
+        return False, f"deny {tool}: principal {c.principal_id!r} không có trong principals.json"
+    if not c.requested_tool:
+        return False, "deny: thiếu requested_tool, không xác định được quyền cần kiểm"
+
+    # Quyền hiệu lực = principal ∩ agent_scopes (∩ parent_scopes nếu được ủy quyền).
+    if c.requested_tool not in principal.get("allowed_tools", []):
+        return False, f"deny {tool}: principal {c.principal_id!r} không được cấp tool này"
+    if c.requested_tool not in c.agent_scopes:
+        return False, f"deny {tool}: ngoài agent_scopes của {c.agent_owner!r} {list(c.agent_scopes)}"
+    if c.delegation_depth < 0:
+        return False, f"deny {tool}: delegation_depth âm ({c.delegation_depth})"
+    if c.delegation_depth > 0 and c.requested_tool not in c.parent_scopes:
+        return False, (f"deny {tool}: agent con (depth={c.delegation_depth}) không được "
+                       f"vượt parent_scopes {list(c.parent_scopes)}")
+
+    if c.request_purpose not in principal.get("purposes", []):
+        return False, f"deny {tool}: purpose {c.request_purpose!r} không thuộc purposes của {c.principal_id!r}"
+    if c.data_classification == "restricted" and c.request_purpose not in RESTRICTED_PURPOSES:
+        return False, f"deny {tool}: purpose {c.request_purpose!r} không đủ để đọc dữ liệu restricted"
+
+    expiry = _parse_expiry(c.expires_at)
+    if expiry is None:
+        return False, f"deny {tool}: expires_at thiếu hoặc không phải ISO-8601 có timezone ({c.expires_at!r})"
+    if expiry <= datetime.now(timezone.utc):
+        return False, f"deny {tool}: run đã hết hạn lúc {c.expires_at}"
+
+    return True, (f"allow {tool}: {c.principal_id} có quyền, trong scope của {c.agent_owner}, "
+                  f"purpose={c.request_purpose}, classification={c.data_classification}, "
+                  f"egress={c.egress_enabled}, hạn tới {c.expires_at}")
